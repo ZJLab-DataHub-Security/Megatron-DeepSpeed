@@ -92,7 +92,8 @@ def get_batch(data_iterator):
     tokenizer = get_tokenizer()
 
     # Items and their type.
-    keys = ['text']
+    #keys = ['text']
+    keys = ['input_ids', 'labels']
     datatype = torch.int64
 
     # Broadcast data.
@@ -101,11 +102,15 @@ def get_batch(data_iterator):
     else:
         data = None
     data_b = tensor_parallel.broadcast_data(keys, data, datatype)
+    
+    labels = data_b['labels'].long()[:,1:].contiguous()
+    tokens = data_b['input_ids'].long()[:,:-1].contiguous()
 
     # Unpack.
-    tokens_ = data_b['text'].long()
-    labels = tokens_[:, 1:].contiguous()
-    tokens = tokens_[:, :-1].contiguous()
+    #tokens_ = data_b['text'].long()
+    #tokens_ = data_b['input_ids'].long()
+    #labels = tokens_[:, 1:].contiguous()
+    #tokens = tokens_[:, :-1].contiguous()
     # Get the masks and postition ids.
     skip_mask = args.use_flash_attn or args.use_flash_attn_triton
     attention_mask, loss_mask, position_ids = get_ltor_masks_and_position_ids(
@@ -285,10 +290,11 @@ def forward_step(data_iterator, model):
         loss_mask = loss_mask[:, :args.curriculum_seqlen].contiguous()
 
     moe_losses = []
-    for moe_loss in other_losses:
-        if moe_loss is not None:
-            moe_losses.append(moe_loss)
-    moe_loss = sum(moe_losses) * args.moe_loss_coeff
+    moe_loss = 0
+    #for moe_loss in other_losses:
+    #    if moe_loss is not None:
+    #        moe_losses.append(moe_loss)
+    #moe_loss = sum(moe_losses) * args.moe_loss_coeff
 
     mos_loss = 0
     if args.mos or args.kd:

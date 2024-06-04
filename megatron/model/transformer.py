@@ -22,6 +22,8 @@ import deepspeed
 from deepspeed.moe.layer import MoE
 from deepspeed.accelerator import get_accelerator
 
+import os
+
 try:
     from deepspeed.sequence.layer import DistributedAttention
     dist_attn_supported = True
@@ -795,6 +797,12 @@ class ParallelAttention(MegatronModule):
         # apply relative positional encoding (rotary embedding)
         if rotary_pos_emb is not None:
             q_pos_emb, k_pos_emb = rotary_pos_emb
+            #print(f"local_rank: {os.environ['LOCAL_RANK']}, sp_rank: {mpu.get_sequence_parallel_rank()}")
+            if self.enable_ds_sequence_parallel:
+                sp_rank = mpu.get_sequence_parallel_rank()
+                partition_seq_len = query_layer.shape[0]
+                q_pos_emb = q_pos_emb[sp_rank * partition_seq_len: (sp_rank+1) * partition_seq_len,...]
+                k_pos_emb = k_pos_emb[sp_rank * partition_seq_len: (sp_rank+1) * partition_seq_len,...]
             query_layer = apply_rotary_pos_emb(query_layer, q_pos_emb)
             key_layer = apply_rotary_pos_emb(key_layer, k_pos_emb)
             # TODO, can apply positional embedding to value_layer so it has
@@ -1363,7 +1371,8 @@ class ParallelTransformerLayer(MegatronModule):
         if self.layer_type == LayerType.retro_decoder_with_retriever:
             return output, retriever_output, moe_loss
         else:
-            return output, moe_loss
+            #return output, moe_loss
+            return output
 
 
 class ParallelTransformerLayerPipe(ParallelTransformerLayer):

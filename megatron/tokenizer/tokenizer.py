@@ -550,17 +550,18 @@ class _HFTokenizer(AbstractTokenizer):
         DEFAULT_BOS_TOKEN = "<s>"
         DEFAULT_UNK_TOKEN = "<unk>"
         special_tokens_dict = dict()
-        if self.tokenizer.pad_token is None:
-            special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
+        #if self.tokenizer.pad_token is None:
+        #    special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
         if self.tokenizer.eos_token is None:
             special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
         if self.tokenizer.bos_token is None:
             special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN
         if self.tokenizer.unk_token is None:
             special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
-        self.tokenizer.add_special_tokens(special_tokens_dict)
-        # if self.tokenizer.pad_token == None:
-        #     self.tokenizer.pad_token= "[PAD]"
+        self.tokenizer.add_special_tokens(special_tokens_dict, replace_additional_special_tokens=False)
+        if self.tokenizer.pad_token == None:
+            #self.tokenizer.pad_token= "[PAD]"
+            self.tokenizer.pad_token= DEFAULT_EOS_TOKEN
         self.tokenizer.model_max_length = max_seq_len
         self.encoder = self.tokenizer.get_vocab()
         self.decoder = {v: k for k, v in self.encoder.items()}

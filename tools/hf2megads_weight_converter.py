@@ -6,8 +6,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
 from megatron import print_rank_0, get_tokenizer, get_args
 from megatron.core import mpu
+from megatron.core.enums import ModelType
 from megatron.core.utils import divide
-from megatron.model import GPTModelPipe, Float16Module
+from megatron.model import GPTModel, GPTModelPipe, Float16Module
 from megatron.utils import unwrap_model
 from megatron.model import DistributedDataParallel as LocalDDP
 from megatron.arguments import core_transformer_config_from_args
@@ -77,7 +78,8 @@ class refactor:
         self.loaded = loaded
         self.config = config
 
-        self.offset_num = 2
+        #self.offset_num = 2
+        self.offset_num = 0
         self.mega_emb_wnum = 1
         self.mega_norm_wnum = args.num_layers + 2
         self.mega_lm_head_wnum = self.mega_norm_wnum + 1
@@ -86,14 +88,14 @@ class refactor:
         self.more_padded = self.padded_vocab_size - self.token_vocab
         self.tp_size = mpu.get_tensor_model_parallel_world_size()
         self.tp_rank = mpu.get_tensor_model_parallel_rank()
-        self.decoder_pat = re.compile("(\d+)\.(.+)")
+        self.decoder_pat = re.compile("(.+)\.(\d+)\.(.+)")
         self.refactor_weight_list = []
         self.is_refactored = False
 
     def _embedding_refactor(self, pname, p):
-        if pname == f"{self.mega_lm_head_wnum}.lm_head.weight":
+        if pname in [ f"{self.mega_lm_head_wnum}.lm_head.weight", "language_model.output_layer.weight"]:
             hf_name = "lm_head.weight"
-        elif pname == f"{self.mega_emb_wnum}.word_embeddings.weight":
+        elif pname in [ f"{self.mega_emb_wnum}.word_embeddings.weight", "language_model.embedding.word_embeddings.weight"]:
             hf_name = "model.embed_tokens.weight"
         hf_w = self.loaded[hf_name]
         assert hf_w.shape[0] == self.token_vocab
@@ -113,7 +115,7 @@ class refactor:
         return new_w
 
     def _direct_refactor(self, pname, p, hf_layer=None, subname=None):
-        if pname == f"{self.mega_norm_wnum}.weight":
+        if pname in [f"{self.mega_norm_wnum}.weight", "language_model.encoder.final_layernorm.weight"]:
             hf_name = "model.norm.weight"
         elif subname in ["input_layernorm.weight", "post_attention_layernorm.weight"]:
             hf_name = f"model.layers.{hf_layer}.{subname}"
@@ -218,15 +220,20 @@ class refactor:
         for pname, p in self.model.named_parameters():
             if pname in [
                     f"{self.mega_emb_wnum}.word_embeddings.weight",
-                    f"{self.mega_lm_head_wnum}.lm_head.weight"
+                    f"{self.mega_lm_head_wnum}.lm_head.weight",
+                    "language_model.embedding.word_embeddings.weight",
+                    "language_model.output_layer.weight",
             ]:
                 new_w = self._embedding_refactor(pname, p)
-            elif pname == f"{self.mega_norm_wnum}.weight":
+            elif pname in [f"{self.mega_norm_wnum}.weight", "language_model.encoder.final_layernorm.weight"]:
                 new_w = self._direct_refactor(pname, p)
             else:
                 mobj = self.decoder_pat.match(pname)
-                layer_num = int(mobj.group(1))
-                subname = mobj.group(2)
+                try:
+                    layer_num = int(mobj.group(2))
+                except:
+                    print(f"pname: {pname}")
+                subname = mobj.group(3)
                 hf_layer = layer_num - self.offset_num
                 if subname in ["self_attention.query_key_value.weight"]:
                     new_w = self._qkv_refactor(pname, p, hf_layer)
@@ -249,7 +256,8 @@ class refactor:
                     new_w = self._direct_refactor(pname, p, hf_layer, subname)
                 else:
                     raise ValueError("Unrecognized weight type")
-            p.data.copy_(new_w)
+            p.data.resize_(new_w.shape).copy_(new_w)
+            #p.data.copy_(new_w)
             new_w = None
         self.is_refactored = True
 
@@ -280,13 +288,17 @@ def convert_hf_to_mega_ds():
 
     config = core_transformer_config_from_args(args)
     with deepspeed.zero.Init(
-            data_parallel_group=mpu.get_data_parallel_group(),
+            #data_parallel_group=mpu.get_data_parallel_group(),
+            sequence_data_parallel_group=mpu.get_sequence_data_parallel_group(),
             remote_device=None if args.remote_device == 'none' else args.remote_device,
             config_dict_or_path=args.deepspeed_config,
             enabled=args.zero_stage == 3,
             mpu=mpu):
         if args.deepspeed and not args.no_pipeline_parallel:
             model = GPTModelPipe(config, num_tokentypes=0, parallel_output=True)
+        elif args.deepspeed:
+            args.model_type=ModelType.encoder_or_decoder
+            model = GPTModel(config, num_tokentypes=0, parallel_output=True)
         else:
             raise NotImplementedError("Not implemented")
 
